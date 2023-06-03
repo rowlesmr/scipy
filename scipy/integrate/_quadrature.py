@@ -778,6 +778,160 @@ def simpson(y, x=None, dx=1.0, axis=-1, even=None):
     return result
 
 
+def cumulative_simpson(y, x=None, dx=1.0, axis=-1, initial=None):
+    """
+    Cumulatively integrate y(x) using the Simpson's rule.
+
+    Parameters
+    ----------
+    y : array_like
+        Values to integrate.
+    x : array_like, optional
+        The coordinate to integrate along. If None (default), use spacing `dx`
+        between consecutive elements in `y`.
+    dx : float, optional
+        Spacing between elements of `y`. Only used if `x` is None. Default is 1.
+    axis : int, optional
+        Specifies the axis to cumulate. Default is -1 (last axis).
+    initial : scalar, optional
+        If given, insert this value at the beginning of the returned result.
+        Typically this value should be 0. Default is None, which means no
+        value at ``x[0]`` is returned and `res` has one element less than `y`
+        along the axis of integration.
+
+    Returns
+    -------
+    res : ndarray
+        The result of cumulative integration of `y` along `axis`.
+        If `initial` is None, the shape is such that the axis of integration
+        has one less value than `y`. If `initial` is given, the shape is equal
+        to that of `y`.
+
+    See Also
+    --------
+    numpy.cumsum
+    quad : adaptive quadrature using QUADPACK
+    romberg : adaptive Romberg quadrature
+    quadrature : adaptive Gaussian quadrature
+    fixed_quad : fixed-order Gaussian quadrature
+    dblquad : double integrals
+    tplquad : triple integrals
+    romb : integrators for sampled data
+    cumulative_trapezoid : cumulative integration for sampled data
+    ode : ODE integrators
+    odeint : ODE integrators
+
+    References
+    ----------
+    .. [1] Blake, L.V. (1971) A Modified Simpson's Rule and Fortran
+           Subroutine for Cumulative Numerical Integration of a Function
+           Defined by Data Points. Naval Research Laboratory Memorandum
+           Report 2231. https://apps.dtic.mil/sti/pdfs/AD0723583.pdf
+
+    Examples
+    --------
+    >>> from scipy import integrate
+    >>> import numpy as np
+    >>> import matplotlib.pyplot as plt
+
+    >>> x = np.linspace(-2, 2, num=20)
+    >>> y = x
+    >>> y_int = integrate.cumulative_simpson(y, x, initial=0)
+    >>> plt.plot(x, y_int, 'ro', x, y[0] + 0.5 * x**2, 'b-')
+    >>> plt.show()
+
+    """
+    assert y.size >= 3
+    y = np.asarray(y)
+
+    if initial is not None and not np.isscalar(initial):
+        raise ValueError("`initial` parameter should be a scalar.")
+
+    if x is None:
+        if not np.isscalar(dx):
+            raise ValueError("`dx` parameter should be a scalar.")
+
+        return _cumulative_simpson_equal(y, dx=dx, axis=axis, initial=initial)
+    else:
+        x = np.asarray(x)
+        if x.ndim == 1:
+            pass
+        elif len(x.shape) != len(y.shape):
+            raise ValueError("If given, shape of x must be 1-D or the "
+                             "same as y.")
+        else:
+            d = np.diff(x, axis=axis)
+
+        return _cumulative_simpson_unequal(y, x=x, axis=axis, initial=initial)
+
+
+def _cumulative_simpson_equal(y, dx=1.0, axis=-1, initial=None):
+    # https://apps.dtic.mil/sti/pdfs/AD0723583.pdf
+    n = y.size
+    r = np.empty(n)
+
+    def calc_A1(y1, y2, y3):
+        return 1.25 * y1 + 2.0 * y2 - 0.25 * y3
+
+    def calc_A2(y1, y2, y3):
+        return -0.25 * y1 + 2.0 * y2 + 1.25 * y3
+
+    r[0] = 0.0
+    y3 = y[2::2]
+    if n % 2 == 0:
+        y1 = y[:-2:2]
+        y2 = y[1:-1:2]
+        r[1:-1:2] = calc_A1(y1, y2, y3)
+        r[-1] = calc_A2(y[-3], y[-2], y[-1])
+    else:
+        y1 = y[:-1:2]
+        y2 = y[1::2]
+        r[1::2] = calc_A1(y1, y2, y3)
+    r[2::2] = calc_A2(y1, y2, y3)
+
+    fac = dx / 3.0
+    return fac * np.cumsum(r)[1:] if initial is None else fac * np.cumsum(r) + initial
+
+
+def _cumulative_simpson_unequal(y, x, axis=-1, initial=None):
+    n = y.size
+    r = np.empty(n)
+
+    def calc_A1(x1, x2, x3, y1, y2, y3):
+        s1 = (x2 - x1) / (6 * (x2 - x3) * (x1 - x3))
+        return s1 * (x1**2 * (y2 - y3) + x2**2 * (y1 - y3) +
+                     3 * x3**2 * (y1 + y2) +
+                     2 * x1 * (x2 * (y1 + y2 + y3) - x3 * (y1 + 2 * y2)) -
+                     2 * x2 * x3 * (2 * y1 + y2))
+
+    def calc_A2(x1, x2, x3, y1, y2, y3):
+        s2 = (x3 - x2) / (6 * (x1 - x2) * (x1 - x3))
+        return s2 * (x2**2 * (y3 - y1) + x3**2 * (y2 - y1) +
+                     3 * x1**2 * (y2 + y3) +
+                     2 * x2 * (x3 * (y1 + y2 + y3) - x1 * (y2 + 2 * y3)) -
+                     2 * x1 * x3 * (2 * y2 + y3))
+
+    r[0] = 0.0
+    y3 = y[2::2]
+    x3 = x[2::2]
+    if n % 2 == 0:
+        y1 = y[:-2:2]
+        x1 = x[:-2:2]
+        y2 = y[1:-1:2]
+        x2 = x[1:-1:2]
+        r[1:-1:2] = calc_A1(x1, x2, x3, y1, y2, y3)
+        r[-1] = calc_A2(x[-3], x[-2], x[-1], y[-3], y[-2], y[-1])
+    else:
+        y1 = y[:-1:2]
+        x1 = x[:-1:2]
+        y2 = y[1::2]
+        x2 = x[1::2]
+        r[1::2] = calc_A1(x1, x2, x3, y1, y2, y3)
+    r[2::2] = calc_A2(x1, x2, x3, y1, y2, y3)
+
+    return np.cumsum(r)[1:] if initial is None else np.cumsum(r) + initial
+
+
 def romb(y, dx=1.0, axis=-1, show=False):
     """
     Romberg integration using samples of a function.
